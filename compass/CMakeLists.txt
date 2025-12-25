@@ -34,8 +34,10 @@ project(compass C CXX ASM)
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
+# Make warnings errors and add more warnings
+add_compile_options(-Werror -Wall -Wextra -Wnull-dereference)
 
-add_executable(compass main.c )
+add_executable(compass main.cpp cycle_delay.s)
 
 pico_set_program_name(compass "compass")
 pico_set_program_version(compass "0.1")
