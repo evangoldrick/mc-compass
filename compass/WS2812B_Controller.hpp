@@ -1,22 +1,10 @@
 /*
 Basic library for controlling a strip of WS2812B LEDs (header only)
-
-Taking guidance from code on this forum: https://forums.raspberrypi.com/viewtopic.php?t=322218
-Delay code comes from cycle_delay.s provided in the forum.
-
 */
 #pragma once
 #include "pico/stdlib.h"
+#include "hardware/sync.h"
 #include <math.h>
-
-extern "C" { // Functions defined in cycle_delay.s
-    void cycle_delay_t0h();
-    void cycle_delay_t0l();
-    void cycle_delay_t1h();
-    void cycle_delay_t1l();
-    uint32_t disable_and_save_interrupts();
-    void enable_and_restore_interrupts(uint32_t);
-}
 
 class WS2812B_Controller {
     public:
@@ -34,14 +22,21 @@ class WS2812B_Controller {
         } s;
     };
 
+    /**
+     * @brief Color type used to set rgb value in one variable. Format: 0x00RRGGBB.
+     */
+    typedef uint64_t Color;
+
     private:
     uint8_t ledPin = 0;
     uint numLeds = 0;
     LED* leds = nullptr;
     absolute_time_t nextAllowedTransmissionTime = 0;
 
-    public:
     WS2812B_Controller() = delete;
+    WS2812B_Controller(const WS2812B_Controller&) = delete;
+    WS2812B_Controller(WS2812B_Controller&&) = delete;
+    public:
     /**
      * @brief Constructs a WS2812B LED controller object.
      * @param ledPin The GPIO pin number to which the WS2812B LEDs are connected.
@@ -84,7 +79,7 @@ class WS2812B_Controller {
         }
     }
 
-    inline void setLed(const uint& index, const uint64_t& color) {
+    inline void setLed(const uint& index, const Color& color) {
         setLed(index, (uint8_t) ((color >> 16) & 0xFF), (uint8_t) ((color >> 8) & 0xFF), (uint8_t) (color & 0xFF));
     }
 
@@ -94,12 +89,19 @@ class WS2812B_Controller {
         }
     }
 
-    inline void setAllLeds(const uint64_t& color) {
+    inline void setAllLeds(const Color& color) {
         for (uint i = 0; i < numLeds; i++) {
             setLed(i, color);
         }
     }
 
+    /**
+     * @brief Set a LED to a color using HSV
+     * @param index of the LED
+     * @param h Hue
+     * @param s Saturation
+     * @param v Value
+     */
     void setLedHSV(const uint& index, float h, float s, float v) {
         if (h < 0.0f) h = 0.0f;
         if (h > 360.0f) h = 360.0f;
@@ -134,11 +136,20 @@ class WS2812B_Controller {
         setLed(index, r, g, b);
     }
 
+    inline void setAllLedsHSV(float h, float s, float v) {
+        for (uint i = 0; i < numLeds; i++) {
+            setLedHSV(i, h, s, v);
+        }
+    }
+
+    /**
+     * @brief Output the current pixel buffer to the LEDs
+     */
     void show() {
-        while (absolute_time_diff_us(get_absolute_time(), nextAllowedTransmissionTime) > 0);
+        sleep_until(nextAllowedTransmissionTime);
 
         uint32_t pin = 1ul << ledPin; // Mask of pin connected to strip
-        uint32_t interrupt_mask = disable_and_save_interrupts();
+        uint32_t interrupt_mask = save_and_disable_interrupts();
         int8_t bit;
         uint8_t subpixel;
         for (uint led = 0; led < numLeds; led++) {
@@ -146,22 +157,44 @@ class WS2812B_Controller {
                 for (bit = 7; bit >= 0; bit--) {
                     if ((leds[led].data[subpixel] >> bit ) & 1) { // Bit high, on-time is longer than off-time
                         sio_hw->gpio_set = pin;
-                        cycle_delay_t1h();
+                        cycleDelay(cycleDelayConvertFromNanoseconds(800));
                         sio_hw->gpio_clr = pin;
-                        cycle_delay_t1l();
+                        cycleDelay(cycleDelayConvertFromNanoseconds(450));
                     } else { // Bit low, on-time is shorter than off-time
                         sio_hw->gpio_set = pin;
-                        cycle_delay_t0h();
+                        cycleDelay(cycleDelayConvertFromNanoseconds(400));
                         sio_hw->gpio_clr = pin;
-                        cycle_delay_t0l();
+                        cycleDelay(cycleDelayConvertFromNanoseconds(850));
                     }
                 }
             }
         }
         
         sio_hw->gpio_clr = pin;
-        enable_and_restore_interrupts(interrupt_mask);
-        nextAllowedTransmissionTime = make_timeout_time_us(50);
+        restore_interrupts(interrupt_mask);
+        nextAllowedTransmissionTime = make_timeout_time_us(50); // Don't allow another transmission until 50us after the last one
+    }
+
+    /**
+     * @brief Convert nanoseconds to cycles of delay time for the cycleDelay function.
+     * @details This is constexpr so the delay calculation does not add to the delay time. Each clock cycle taken is significant here.
+     * @param delay How many nanoseconds to wait for.
+     */
+    constexpr uint cycleDelayConvertFromNanoseconds(uint delay) {
+        double delayFactor = ((double) SYS_CLK_HZ) / (3.0 * 1.0E9); // 3 cycles per delay loop from the cycleDelay function
+        return delay * delayFactor;
+    }
+
+    /**
+     * @brief Function to delay by some number of cycles * 3.
+     * @details Assuming the function is inlined properly, the number of cycles executed should be 3 * cycles + 1.
+     * @param cycles How many cycles should be spent waiting.
+     */
+    inline void cycleDelay(uint cycles) {
+        pico_default_asm_volatile(
+            "1: SUBS %[num_cycles], #1\n" // 1 cycle
+            "BNE 1b\n" // 2 cycles when branch taken 1 when not taken
+            : : [num_cycles] "r" (cycles));
     }
 };
 

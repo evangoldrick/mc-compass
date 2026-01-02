@@ -28,7 +28,7 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(compass C CXX ASM)
+project(compass C CXX)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
@@ -37,7 +37,7 @@ pico_sdk_init()
 # Make warnings errors and add more warnings
 add_compile_options(-Werror -Wall -Wextra -Wnull-dereference)
 
-add_executable(compass main.cpp cycle_delay.s)
+add_executable(compass main.cpp DisplayCompass.cpp CompassMain.cpp)
 
 pico_set_program_name(compass "compass")
 pico_set_program_version(compass "0.1")
@@ -62,4 +62,3 @@ target_link_libraries(compass
         )
 
 pico_add_extra_outputs(compass)
-
